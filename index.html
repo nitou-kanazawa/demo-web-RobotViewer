@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<title>多関節ロボット シミュレータ</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: rgba(20, 26, 34, 0.92);
+    --accent: #f08a24;
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --border: #2a3340;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+  }
+  #scene { position: fixed; inset: 0; touch-action: none; }
+
+  #title {
+    position: fixed; top: 0; left: 0; right: 0;
+    padding: calc(env(safe-area-inset-top) + 10px) 14px 10px;
+    background: linear-gradient(180deg, rgba(14,17,22,0.85), rgba(14,17,22,0));
+    font-size: 14px; font-weight: 600; letter-spacing: .02em;
+    display: flex; align-items: center; gap: 8px; pointer-events: none;
+  }
+  #title .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+  #title small { color: var(--muted); font-weight: 400; }
+
+  #panel {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    border-radius: 16px 16px 0 0;
+    backdrop-filter: blur(10px);
+    padding: 8px 14px calc(env(safe-area-inset-bottom) + 12px);
+    max-height: 56vh; overflow-y: auto;
+    transition: transform .25s ease;
+    box-shadow: 0 -8px 30px rgba(0,0,0,.4);
+  }
+  #panel.collapsed { transform: translateY(calc(100% - 46px)); }
+
+  #panelHeader {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 4px 0 8px; cursor: pointer; user-select: none;
+  }
+  #panelHeader b { font-size: 13px; }
+  #panelHeader .grip { width: 38px; height: 4px; border-radius: 2px; background: var(--border);
+    position: absolute; left: 50%; transform: translateX(-50%); top: 6px; }
+  #toggleBtn { color: var(--muted); font-size: 12px; }
+
+  .row { margin: 10px 0; }
+  .row .label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
+  .row .label .name { color: var(--text); }
+  .row .label .val { color: var(--accent); font-variant-numeric: tabular-nums; }
+  input[type=range] {
+    -webkit-appearance: none; appearance: none; width: 100%; height: 30px;
+    background: transparent; margin: 0;
+  }
+  input[type=range]::-webkit-slider-runnable-track {
+    height: 6px; border-radius: 3px; background: #1c2530; border: 1px solid var(--border);
+  }
+  input[type=range]::-moz-range-track {
+    height: 6px; border-radius: 3px; background: #1c2530; border: 1px solid var(--border);
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 26px; height: 26px; margin-top: -11px;
+    border-radius: 50%; background: var(--accent); border: 2px solid #fff2;
+    box-shadow: 0 2px 6px rgba(0,0,0,.5);
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 26px; height: 26px; border-radius: 50%; background: var(--accent); border: 2px solid #fff2;
+  }
+
+  .btns { display: flex; gap: 8px; margin-top: 4px; }
+  button.act {
+    flex: 1; padding: 11px; border-radius: 10px; border: 1px solid var(--border);
+    background: #18212c; color: var(--text); font-size: 13px; font-weight: 600;
+  }
+  button.act:active { background: #222d3a; }
+  button.act.primary { background: var(--accent); color: #1a1206; border-color: transparent; }
+
+  #loading {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 14px; background: var(--bg); z-index: 10; font-size: 14px; color: var(--muted);
+  }
+  .spin { width: 34px; height: 34px; border: 3px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; animation: r 1s linear infinite; }
+  @keyframes r { to { transform: rotate(360deg); } }
+  #err { color: #ff6b6b; font-size: 12px; max-width: 80%; text-align: center; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+
+  <div id="title"><span class="dot"></span> 多関節ロボット シミュレータ <small>URDF / 6-DOF</small></div>
+
+  <div id="loading">
+    <div class="spin"></div>
+    <div>ロボットを読み込み中…</div>
+    <div id="err"></div>
+  </div>
+
+  <div id="panel" class="collapsed">
+    <div id="panelHeader">
+      <span class="grip"></span>
+      <b>関節コントロール</b>
+      <span id="toggleBtn">開く ▲</span>
+    </div>
+    <div id="sliders"></div>
+    <div class="btns">
+      <button class="act" id="homeBtn">ホーム姿勢</button>
+      <button class="act primary" id="poseBtn">サンプル姿勢</button>
+    </div>
+  </div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "urdf-loader": "https://esm.sh/urdf-loader@0.13.0?external=three"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import URDFLoader from 'urdf-loader';
+
+// ---- サンプル6軸アームの URDF（プリミティブ形状なので外部メッシュ不要） ----
+const URDF = `
+<robot name="arm6">
+  <material name="base"><color rgba="0.16 0.18 0.22 1"/></material>
+  <material name="link"><color rgba="0.13 0.55 0.85 1"/></material>
+  <material name="joint"><color rgba="0.94 0.54 0.14 1"/></material>
+  <material name="ee"><color rgba="0.86 0.22 0.30 1"/></material>
+
+  <link name="base_link">
+    <visual><origin xyz="0 0 0.03"/><geometry><cylinder radius="0.10" length="0.06"/></geometry><material name="base"/></visual>
+  </link>
+
+  <joint name="joint1" type="revolute">
+    <parent link="base_link"/><child link="link1"/>
+    <origin xyz="0 0 0.06"/><axis xyz="0 0 1"/>
+    <limit lower="-3.1416" upper="3.1416" effort="10" velocity="2"/>
+  </joint>
+  <link name="link1">
+    <visual><origin xyz="0 0 0.05"/><geometry><cylinder radius="0.075" length="0.10"/></geometry><material name="joint"/></visual>
+  </link>
+
+  <joint name="joint2" type="revolute">
+    <parent link="link1"/><child link="link2"/>
+    <origin xyz="0 0 0.10"/><axis xyz="0 1 0"/>
+    <limit lower="-1.85" upper="1.85" effort="10" velocity="2"/>
+  </joint>
+  <link name="link2">
+    <visual><origin xyz="0 0 0.16"/><geometry><box size="0.075 0.075 0.32"/></geometry><material name="link"/></visual>
+  </link>
+
+  <joint name="joint3" type="revolute">
+    <parent link="link2"/><child link="link3"/>
+    <origin xyz="0 0 0.32"/><axis xyz="0 1 0"/>
+    <limit lower="-2.6" upper="2.6" effort="10" velocity="2"/>
+  </joint>
+  <link name="link3">
+    <visual><origin xyz="0 0 0.13"/><geometry><box size="0.062 0.062 0.26"/></geometry><material name="link"/></visual>
+  </link>
+
+  <joint name="joint4" type="revolute">
+    <parent link="link3"/><child link="link4"/>
+    <origin xyz="0 0 0.26"/><axis xyz="0 0 1"/>
+    <limit lower="-3.1416" upper="3.1416" effort="10" velocity="2"/>
+  </joint>
+  <link name="link4">
+    <visual><origin xyz="0 0 0.05"/><geometry><cylinder radius="0.052" length="0.10"/></geometry><material name="joint"/></visual>
+  </link>
+
+  <joint name="joint5" type="revolute">
+    <parent link="link4"/><child link="link5"/>
+    <origin xyz="0 0 0.10"/><axis xyz="0 1 0"/>
+    <limit lower="-1.95" upper="1.95" effort="10" velocity="2"/>
+  </joint>
+  <link name="link5">
+    <visual><origin xyz="0 0 0.045"/><geometry><box size="0.052 0.052 0.09"/></geometry><material name="joint"/></visual>
+  </link>
+
+  <joint name="joint6" type="revolute">
+    <parent link="link5"/><child link="link6"/>
+    <origin xyz="0 0 0.09"/><axis xyz="0 0 1"/>
+    <limit lower="-3.1416" upper="3.1416" effort="10" velocity="2"/>
+  </joint>
+  <link name="link6">
+    <visual><origin xyz="0 0 0.03"/><geometry><box size="0.11 0.045 0.06"/></geometry><material name="ee"/></visual>
+  </link>
+</robot>`;
+
+const SAMPLE_POSE = { joint1: 0.6, joint2: -0.7, joint3: 1.2, joint4: 0.0, joint5: 0.9, joint6: 0.0 };
+
+// ---- three.js セットアップ ----
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0e1116);
+
+const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 100);
+camera.position.set(1.0, 0.9, 1.2);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.target.set(0, 0.45, 0);
+controls.minDistance = 0.4;
+controls.maxDistance = 5;
+controls.maxPolarAngle = Math.PI * 0.52;
+
+// ライト
+scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x1a1f26, 0.7));
+const key = new THREE.DirectionalLight(0xffffff, 2.0);
+key.position.set(1.5, 3, 2);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.near = 0.5; key.shadow.camera.far = 12;
+key.shadow.camera.left = -2; key.shadow.camera.right = 2;
+key.shadow.camera.top = 2; key.shadow.camera.bottom = -2;
+key.shadow.bias = -0.0005;
+scene.add(key);
+scene.add(new THREE.DirectionalLight(0x88aaff, 0.4).translateX(-2).translateZ(-1));
+
+// 環境（床グリッド）— Phase 3 の当たり判定で障害物を足していく土台
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(3, 64),
+  new THREE.MeshStandardMaterial({ color: 0x121821, roughness: 1, metalness: 0 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+const grid = new THREE.GridHelper(4, 20, 0x2a3340, 0x1b2330);
+grid.position.y = 0.001;
+scene.add(grid);
+
+// ---- URDF 読み込み ----
+let robot = null;
+const slidersEl = document.getElementById('sliders');
+
+function setVal(name, v) {
+  robot.setJointValue(name, v);
+}
+
+const loader = new URDFLoader();
+loader.parseCollision = false;
+try {
+  robot = loader.parse(URDF);
+
+  // URDF は Z-up。three.js は Y-up なので X 軸まわりに -90°回して立たせる。
+  robot.rotation.x = -Math.PI / 2;
+  robot.traverse((c) => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
+  scene.add(robot);
+
+  buildSliders();
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('panel').classList.remove('collapsed');
+} catch (e) {
+  document.getElementById('err').textContent = '読み込み失敗: ' + e.message;
+  console.error(e);
+}
+
+// ---- 関節スライダー UI ----
+function buildSliders() {
+  slidersEl.innerHTML = '';
+  Object.values(robot.joints).forEach((joint) => {
+    if (joint.jointType === 'fixed') return;
+    const name = joint.name;
+    const lo = joint.limit.lower, hi = joint.limit.upper;
+
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `
+      <div class="label"><span class="name">${name}</span><span class="val" id="v_${name}">0°</span></div>
+      <input type="range" min="${lo}" max="${hi}" step="0.01" value="0" id="s_${name}">`;
+    slidersEl.appendChild(row);
+
+    const slider = row.querySelector('input');
+    const valEl = row.querySelector('.val');
+    slider.addEventListener('input', () => {
+      const v = parseFloat(slider.value);
+      setVal(name, v);
+      valEl.textContent = Math.round(v * 180 / Math.PI) + '°';
+    });
+  });
+}
+
+function applyPose(pose) {
+  Object.values(robot.joints).forEach((joint) => {
+    if (joint.jointType === 'fixed') return;
+    const v = pose[joint.name] ?? 0;
+    setVal(joint.name, v);
+    const slider = document.getElementById('s_' + joint.name);
+    const valEl = document.getElementById('v_' + joint.name);
+    if (slider) slider.value = v;
+    if (valEl) valEl.textContent = Math.round(v * 180 / Math.PI) + '°';
+  });
+}
+
+document.getElementById('homeBtn').addEventListener('click', () => applyPose({}));
+document.getElementById('poseBtn').addEventListener('click', () => applyPose(SAMPLE_POSE));
+
+// ---- パネル開閉 ----
+const panel = document.getElementById('panel');
+document.getElementById('panelHeader').addEventListener('click', () => {
+  const collapsed = panel.classList.toggle('collapsed');
+  document.getElementById('toggleBtn').textContent = collapsed ? '開く ▲' : '閉じる ▼';
+});
+
+// ---- リサイズ & 描画ループ ----
+function resize() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+renderer.setAnimationLoop(() => {
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
