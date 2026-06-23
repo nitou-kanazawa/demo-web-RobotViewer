@@ -84,6 +84,45 @@
   button.act:active { background: #222d3a; }
   button.act.primary { background: var(--accent); color: #1a1206; border-color: transparent; }
 
+  .tabs { display: flex; gap: 6px; margin: 2px 0 8px; }
+  .tab {
+    flex: 1; padding: 9px; border-radius: 9px; border: 1px solid var(--border);
+    background: #141b24; color: var(--muted); font-size: 13px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .tab.active { background: #1e2935; color: var(--text); border-color: var(--accent); }
+  .badge {
+    min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--accent);
+    color: #1a1206; font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+  }
+  .tabpane { display: none; }
+  .tabpane.active { display: block; }
+
+  .muted { color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .wplist { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 10px; }
+  .wp {
+    display: flex; align-items: center; gap: 8px; padding: 9px 10px;
+    background: #141b24; border: 1px solid var(--border); border-radius: 10px;
+  }
+  .wp.current { border-color: var(--accent); background: #1c2733; }
+  .wp .idx {
+    width: 24px; height: 24px; flex: 0 0 auto; border-radius: 50%; background: #243040;
+    display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700;
+  }
+  .wp.current .idx { background: var(--accent); color: #1a1206; }
+  .wp .deg { flex: 1; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums;
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .wp .mini { background: none; border: none; color: var(--muted); font-size: 16px; padding: 4px 6px; }
+  .wp .mini.go { color: #5db1ff; }
+  .wp .mini.del { color: #ff6b6b; }
+
+  .ctrlrow { margin: 10px 0 4px; }
+  .ctrllabel { font-size: 12px; color: var(--muted); display: block; margin-bottom: 2px; }
+  .ctrllabel b { color: var(--accent); }
+  .chkrow { display: flex; gap: 16px; margin: 6px 0 2px; }
+  .chk { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 6px; }
+  .chk input { width: 18px; height: 18px; accent-color: var(--accent); }
+
   #loading {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     flex-direction: column; gap: 14px; background: var(--bg); z-index: 10; font-size: 14px; color: var(--muted);
@@ -108,13 +147,44 @@
   <div id="panel" class="collapsed">
     <div id="panelHeader">
       <span class="grip"></span>
-      <b>関節コントロール</b>
+      <b>コントロール</b>
       <span id="toggleBtn">開く ▲</span>
     </div>
-    <div id="sliders"></div>
-    <div class="btns">
-      <button class="act" id="homeBtn">ホーム姿勢</button>
-      <button class="act primary" id="poseBtn">サンプル姿勢</button>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="joints">関節</button>
+      <button class="tab" data-tab="path">パス <span id="wpBadge" class="badge">0</span></button>
+    </div>
+
+    <div id="tab-joints" class="tabpane active">
+      <div id="sliders"></div>
+      <div class="btns">
+        <button class="act" id="homeBtn">ホーム姿勢</button>
+        <button class="act" id="poseBtn">サンプル姿勢</button>
+      </div>
+      <div class="btns">
+        <button class="act primary" id="addWpBtn">＋ この姿勢を経由点に追加</button>
+      </div>
+    </div>
+
+    <div id="tab-path" class="tabpane">
+      <div id="wpEmpty" class="muted">経由点がありません。<br>「関節」タブで姿勢を作り「＋ この姿勢を経由点に追加」を押してください。</div>
+      <div id="wpList" class="wplist"></div>
+
+      <div class="ctrlrow">
+        <span class="ctrllabel">区間あたり <b id="durVal">1.5</b> 秒</span>
+        <input type="range" id="durSlider" min="0.3" max="4" step="0.1" value="1.5">
+      </div>
+      <div class="chkrow">
+        <label class="chk"><input type="checkbox" id="loopChk"> ループ</label>
+        <label class="chk"><input type="checkbox" id="traceChk" checked> 軌跡</label>
+      </div>
+
+      <div class="btns">
+        <button class="act" id="clearWpBtn">クリア</button>
+        <button class="act primary" id="playBtn">▶ 再生</button>
+      </div>
+      <div id="playStatus" class="muted"></div>
     </div>
   </div>
 
@@ -300,20 +370,152 @@ function buildSliders() {
   });
 }
 
-function applyPose(pose) {
-  Object.values(robot.joints).forEach((joint) => {
-    if (joint.jointType === 'fixed') return;
-    const v = pose[joint.name] ?? 0;
-    setVal(joint.name, v);
-    const slider = document.getElementById('s_' + joint.name);
-    const valEl = document.getElementById('v_' + joint.name);
+// 可動関節（fixed以外）の一覧
+function movableJoints() {
+  return Object.values(robot.joints).filter((j) => j.jointType !== 'fixed');
+}
+// 現在の姿勢を {関節名: 角度} で読み取る
+function readPose() {
+  const p = {};
+  movableJoints().forEach((j) => { p[j.name] = j.angle; });
+  return p;
+}
+// スライダー/数値表示を姿勢に同期
+function updateSliderUI(pose) {
+  movableJoints().forEach((j) => {
+    const v = pose[j.name] ?? 0;
+    const slider = document.getElementById('s_' + j.name);
+    const valEl = document.getElementById('v_' + j.name);
     if (slider) slider.value = v;
     if (valEl) valEl.textContent = Math.round(v * 180 / Math.PI) + '°';
   });
 }
+// ロボットへ姿勢を適用しUIも更新
+function applyPose(pose) {
+  movableJoints().forEach((j) => setVal(j.name, pose[j.name] ?? 0));
+  updateSliderUI(pose);
+}
 
-document.getElementById('homeBtn').addEventListener('click', () => applyPose({}));
-document.getElementById('poseBtn').addEventListener('click', () => applyPose(SAMPLE_POSE));
+document.getElementById('homeBtn').addEventListener('click', () => { stopPlay(); applyPose({}); });
+document.getElementById('poseBtn').addEventListener('click', () => { stopPlay(); applyPose(SAMPLE_POSE); });
+
+// ---- タブ切り替え ----
+document.querySelectorAll('.tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+    document.querySelectorAll('.tabpane').forEach((p) => p.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+  });
+});
+
+// ---- 経由点（ウェイポイント）管理 ----
+const waypoints = [];
+const wpListEl = document.getElementById('wpList');
+const wpEmptyEl = document.getElementById('wpEmpty');
+const wpBadge = document.getElementById('wpBadge');
+
+function poseToDeg(pose) {
+  return movableJoints().map((j) => Math.round((pose[j.name] ?? 0) * 180 / Math.PI) + '°').join(' / ');
+}
+function renderWaypoints() {
+  wpBadge.textContent = waypoints.length;
+  wpEmptyEl.style.display = waypoints.length ? 'none' : 'block';
+  wpListEl.innerHTML = '';
+  waypoints.forEach((wp, i) => {
+    const row = document.createElement('div');
+    row.className = 'wp' + (player.playing && i === player.activeSeg ? ' current' : '');
+    row.innerHTML = `
+      <span class="idx">${i + 1}</span>
+      <span class="deg">${poseToDeg(wp)}</span>
+      <button class="mini go" title="この姿勢へ">⤓</button>
+      <button class="mini del" title="削除">✕</button>`;
+    row.querySelector('.go').addEventListener('click', () => { stopPlay(); applyPose(wp); });
+    row.querySelector('.del').addEventListener('click', () => { stopPlay(); waypoints.splice(i, 1); renderWaypoints(); });
+    wpListEl.appendChild(row);
+  });
+}
+document.getElementById('addWpBtn').addEventListener('click', () => {
+  waypoints.push(readPose());
+  renderWaypoints();
+  document.querySelector('.tab[data-tab="path"]').click(); // パスタブへ誘導
+});
+document.getElementById('clearWpBtn').addEventListener('click', () => { stopPlay(); waypoints.length = 0; clearTrace(); renderWaypoints(); });
+
+// ---- 区間あたりの秒数 ----
+const durSlider = document.getElementById('durSlider');
+const durVal = document.getElementById('durVal');
+durSlider.addEventListener('input', () => { durVal.textContent = parseFloat(durSlider.value).toFixed(1); });
+
+// ---- 手先（エンドエフェクタ）の軌跡トレース ----
+const traceChk = document.getElementById('traceChk');
+const eeLink = robot.links['link6'];
+let tracePts = [];
+const traceGeom = new THREE.BufferGeometry();
+const traceLine = new THREE.Line(traceGeom, new THREE.LineBasicMaterial({ color: 0xff5a6e }));
+traceLine.frustumCulled = false;
+scene.add(traceLine);
+const _wp = new THREE.Vector3();
+function clearTrace() { tracePts = []; traceGeom.setFromPoints([]); }
+function pushTrace() {
+  if (!traceChk.checked || !eeLink) return;
+  robot.updateMatrixWorld(true);
+  eeLink.getWorldPosition(_wp);
+  tracePts.push(_wp.clone());
+  if (tracePts.length > 1500) tracePts.shift();
+  traceGeom.setFromPoints(tracePts);
+}
+traceChk.addEventListener('change', () => { if (!traceChk.checked) clearTrace(); });
+
+// ---- 再生エンジン（経由点を線形補間 + smoothstep でなめらかに） ----
+const player = { playing: false, time: 0, activeSeg: -1 };
+const playBtn = document.getElementById('playBtn');
+const loopChk = document.getElementById('loopChk');
+const playStatus = document.getElementById('playStatus');
+const clock = new THREE.Clock();
+const smooth = (t) => t * t * (3 - 2 * t);
+
+function startPlay() {
+  if (waypoints.length < 2) { playStatus.textContent = '経由点が2つ以上必要です。'; return; }
+  player.playing = true;
+  player.time = 0;
+  player.activeSeg = -1;
+  clearTrace();
+  playBtn.textContent = '⏸ 一時停止';
+}
+function stopPlay() {
+  if (!player.playing) return;
+  player.playing = false;
+  playBtn.textContent = '▶ 再生';
+  renderWaypoints();
+}
+playBtn.addEventListener('click', () => { player.playing ? stopPlay() : startPlay(); });
+
+function updatePlayback(dt) {
+  if (!player.playing) return;
+  const seg = parseFloat(durSlider.value);
+  const segCount = waypoints.length - 1;
+  const total = segCount * seg;
+  player.time += dt;
+  let finished = false;
+  if (player.time >= total) {
+    if (loopChk.checked) { player.time = player.time % total; }
+    else { player.time = total; finished = true; }
+  }
+  const si = Math.min(Math.floor(player.time / seg), segCount - 1);
+  const local = smooth((player.time - si * seg) / seg);
+  const a = waypoints[si], b = waypoints[si + 1];
+  const pose = {};
+  movableJoints().forEach((j) => {
+    const av = a[j.name] ?? 0, bv = b[j.name] ?? 0;
+    pose[j.name] = av + (bv - av) * local;
+  });
+  applyPose(pose);
+  pushTrace();
+  if (player.activeSeg !== si) { player.activeSeg = si; renderWaypoints(); }
+  playStatus.textContent = `再生中  区間 ${si + 1} / ${segCount}`;
+  if (finished) { stopPlay(); playStatus.textContent = '完了'; }
+}
 
 // ---- パネル開閉 ----
 const panel = document.getElementById('panel');
@@ -333,6 +535,8 @@ addEventListener('resize', resize);
 resize();
 
 renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  if (robot) updatePlayback(dt);
   controls.update();
   renderer.render(scene, camera);
 });
