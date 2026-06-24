@@ -123,6 +123,14 @@
   .chk { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 6px; }
   .chk input { width: 18px; height: 18px; accent-color: var(--accent); }
 
+  #hitBanner {
+    position: fixed; top: calc(env(safe-area-inset-top) + 44px); left: 50%; transform: translateX(-50%);
+    background: rgba(220, 40, 50, 0.92); color: #fff; font-size: 13px; font-weight: 700;
+    padding: 7px 16px; border-radius: 20px; display: none; z-index: 6;
+    box-shadow: 0 4px 14px rgba(220,40,50,.4); animation: pulse 1s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .6; } }
+
   #loading {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     flex-direction: column; gap: 14px; background: var(--bg); z-index: 10; font-size: 14px; color: var(--muted);
@@ -154,6 +162,7 @@
     <div class="tabs">
       <button class="tab active" data-tab="joints">関節</button>
       <button class="tab" data-tab="path">パス <span id="wpBadge" class="badge">0</span></button>
+      <button class="tab" data-tab="env">環境</button>
     </div>
 
     <div id="tab-joints" class="tabpane active">
@@ -186,7 +195,24 @@
       </div>
       <div id="playStatus" class="muted"></div>
     </div>
+
+    <div id="tab-env" class="tabpane">
+      <div class="chkrow" style="flex-direction:column; gap:10px; align-items:flex-start;">
+        <label class="chk"><input type="checkbox" id="collideChk" checked> 当たり判定を有効</label>
+        <label class="chk"><input type="checkbox" id="showObsChk" checked> 障害物を表示</label>
+        <label class="chk"><input type="checkbox" id="stopOnHitChk" checked> 衝突したら再生を停止</label>
+      </div>
+      <div class="muted" style="margin-top:8px;">
+        各リンクの境界ボックス（AABB）と障害物・床の交差で判定します。<br>
+        衝突したリンクは<span style="color:#ff5a6e;">赤く発光</span>します。
+      </div>
+      <div class="btns">
+        <button class="act" id="resetObsBtn">障害物を初期配置に戻す</button>
+      </div>
+    </div>
   </div>
+
+  <div id="hitBanner">⚠ 衝突を検知</div>
 
 <script type="importmap">
 {
@@ -321,6 +347,7 @@ scene.add(grid);
 
 // ---- URDF 読み込み ----
 let robot = null;
+const linkMeshes = []; // 当たり判定対象（各リンクの可視メッシュ）
 const slidersEl = document.getElementById('sliders');
 
 function setVal(name, v) {
@@ -334,7 +361,15 @@ try {
 
   // URDF は Z-up。three.js は Y-up なので X 軸まわりに -90°回して立たせる。
   robot.rotation.x = -Math.PI / 2;
-  robot.traverse((c) => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
+  robot.traverse((c) => {
+    if (c.isMesh) {
+      c.castShadow = true; c.receiveShadow = true;
+      // 個別にハイライトできるようマテリアルを複製し、元の発光色を控える
+      c.material = c.material.clone();
+      c.userData.baseEmissive = c.material.emissive ? c.material.emissive.getHex() : 0x000000;
+      linkMeshes.push(c);
+    }
+  });
   scene.add(robot);
 
   buildSliders();
@@ -517,6 +552,68 @@ function updatePlayback(dt) {
   if (finished) { stopPlay(); playStatus.textContent = '完了'; }
 }
 
+// ---- 環境（障害物） ----
+const obstacles = [];
+const OBS_MAT = () => new THREE.MeshStandardMaterial({ color: 0x6b7585, roughness: 0.85, metalness: 0.1, transparent: true, opacity: 0.9 });
+function addBoxObstacle(x, y, z, sx, sy, sz) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), OBS_MAT());
+  m.position.set(x, y, z);
+  m.castShadow = true; m.receiveShadow = true;
+  scene.add(m);
+  obstacles.push(m);
+  return m;
+}
+function resetObstacles() {
+  obstacles.forEach((o) => scene.remove(o));
+  obstacles.length = 0;
+  addBoxObstacle(0.46, 0.22, 0.0, 0.16, 0.44, 0.42); // 縦長の壁
+  addBoxObstacle(-0.30, 0.13, 0.34, 0.26, 0.26, 0.26); // 箱
+}
+resetObstacles();
+
+// ---- 当たり判定（各リンクのAABB × 障害物/床） ----
+const collideChk = document.getElementById('collideChk');
+const showObsChk = document.getElementById('showObsChk');
+const stopOnHitChk = document.getElementById('stopOnHitChk');
+const hitBanner = document.getElementById('hitBanner');
+const _lbox = new THREE.Box3();
+
+function setHighlight(mesh, on) {
+  if (!mesh.material.emissive) return;
+  if (on) { mesh.material.emissive.setHex(0xff2a2a); mesh.material.emissiveIntensity = 1; }
+  else { mesh.material.emissive.setHex(mesh.userData.baseEmissive); }
+}
+function clearHighlights() { linkMeshes.forEach((m) => setHighlight(m, false)); }
+
+showObsChk.addEventListener('change', () => {
+  obstacles.forEach((o) => { o.visible = showObsChk.checked; });
+});
+document.getElementById('resetObsBtn').addEventListener('click', () => {
+  resetObstacles();
+  obstacles.forEach((o) => { o.visible = showObsChk.checked; });
+});
+
+function checkCollisions() {
+  if (!collideChk.checked) { clearHighlights(); hitBanner.style.display = 'none'; return; }
+  robot.updateMatrixWorld(true);
+  const obsBoxes = obstacles.filter((o) => o.visible).map((o) => new THREE.Box3().setFromObject(o));
+  let anyHit = false;
+  for (const mesh of linkMeshes) {
+    _lbox.setFromObject(mesh);
+    let hit = _lbox.min.y < -0.005; // 床（y=0）にめり込み
+    if (!hit) {
+      for (const ob of obsBoxes) { if (_lbox.intersectsBox(ob)) { hit = true; break; } }
+    }
+    setHighlight(mesh, hit);
+    if (hit) anyHit = true;
+  }
+  hitBanner.style.display = anyHit ? 'block' : 'none';
+  if (anyHit && player.playing && stopOnHitChk.checked) {
+    stopPlay();
+    playStatus.textContent = '⚠ 衝突を検知して停止しました';
+  }
+}
+
 // ---- パネル開閉 ----
 const panel = document.getElementById('panel');
 document.getElementById('panelHeader').addEventListener('click', () => {
@@ -536,7 +633,7 @@ resize();
 
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
-  if (robot) updatePlayback(dt);
+  if (robot) { updatePlayback(dt); checkCollisions(); }
   controls.update();
   renderer.render(scene, camera);
 });
