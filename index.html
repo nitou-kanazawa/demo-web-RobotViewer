@@ -123,6 +123,37 @@
   .chk { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 6px; }
   .chk input { width: 18px; height: 18px; accent-color: var(--accent); }
 
+  /* ===== PC（広い画面＋マウス）専用レイアウト ===== */
+  #hint {
+    display: none;
+    position: fixed; left: 20px; bottom: 20px; z-index: 4;
+    color: var(--muted); font-size: 12px; line-height: 1.8;
+    background: rgba(20,26,34,.55); padding: 9px 13px; border-radius: 10px;
+    border: 1px solid var(--border); pointer-events: none; backdrop-filter: blur(4px);
+  }
+  #hint b { color: var(--text); font-weight: 600; }
+
+  @media (min-width: 860px) and (pointer: fine) {
+    #title { background: none; font-size: 16px; padding: 18px 22px; }
+    /* コントロールを右サイドの固定ドックに変身 */
+    #panel {
+      left: auto; right: 0; top: 0; bottom: 0;
+      width: 360px; max-height: none; border-radius: 0;
+      border-top: none; border-left: 1px solid var(--border);
+      padding: 16px 18px 22px;
+      box-shadow: -10px 0 34px rgba(0,0,0,.4);
+      transform: none !important; /* 折りたたみ無効（常時表示） */
+    }
+    #panelHeader { padding: 4px 2px 12px; cursor: default; }
+    #panelHeader .grip { display: none; }
+    #panelHeader b { font-size: 16px; }
+    #toggleBtn { display: none; }
+    .tabs { position: sticky; top: 0; z-index: 3; background: var(--panel); padding-bottom: 10px; }
+    .row { margin: 14px 0; }
+    .wp { padding: 11px 12px; }
+    #hint { display: block; } /* マウス操作ヒントを表示 */
+  }
+
   #hitBanner {
     position: fixed; top: calc(env(safe-area-inset-top) + 44px); left: 50%; transform: translateX(-50%);
     background: rgba(220, 40, 50, 0.92); color: #fff; font-size: 13px; font-weight: 700;
@@ -213,6 +244,8 @@
   </div>
 
   <div id="hitBanner">⚠ 衝突を検知</div>
+
+  <div id="hint"><b>ドラッグ</b> 回転 ／ <b>ホイール</b> ズーム ／ <b>右ドラッグ</b> 平行移動</div>
 
 <script type="importmap">
 {
@@ -614,9 +647,14 @@ function checkCollisions() {
   }
 }
 
-// ---- パネル開閉 ----
+// ---- PC / モバイル判定 ----
+const DESKTOP_MQ = window.matchMedia('(min-width: 860px) and (pointer: fine)');
+const DOCK_W = 360; // PC時の右ドック幅（CSSと一致させる）
+
+// ---- パネル開閉（モバイルのみ） ----
 const panel = document.getElementById('panel');
 document.getElementById('panelHeader').addEventListener('click', () => {
+  if (DESKTOP_MQ.matches) return; // PCでは常時表示
   const collapsed = panel.classList.toggle('collapsed');
   document.getElementById('toggleBtn').textContent = collapsed ? '開く ▲' : '閉じる ▼';
 });
@@ -625,10 +663,15 @@ document.getElementById('panelHeader').addEventListener('click', () => {
 function resize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
-  camera.aspect = w / h;
+  // PC時は右ドック分を見越して、ロボットを左の空き領域の中央に寄せる
+  const pad = DESKTOP_MQ.matches ? DOCK_W : 0;
+  camera.aspect = (w + pad) / h;
+  if (pad) camera.setViewOffset(w + pad, h, pad, 0, w, h);
+  else camera.clearViewOffset();
   camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize);
+DESKTOP_MQ.addEventListener('change', resize);
 resize();
 
 renderer.setAnimationLoop(() => {
