@@ -194,6 +194,7 @@
       <button class="tab active" data-tab="joints">関節</button>
       <button class="tab" data-tab="path">パス <span id="wpBadge" class="badge">0</span></button>
       <button class="tab" data-tab="env">環境</button>
+      <button class="tab" data-tab="ik">IK</button>
     </div>
 
     <div id="tab-joints" class="tabpane active">
@@ -241,6 +242,22 @@
         <button class="act" id="resetObsBtn">障害物を初期配置に戻す</button>
       </div>
     </div>
+
+    <div id="tab-ik" class="tabpane">
+      <label class="chk"><input type="checkbox" id="ikChk"> IKモード（先端をドラッグで移動）</label>
+      <div class="muted" style="margin-top:8px;">
+        表示される<span style="color:#5db1ff;">青い球（ギズモ）</span>を掴んで動かすと、<br>
+        先端がそこへ届くよう各関節を自動計算します（CCD法・位置のみ）。
+      </div>
+      <div class="ctrlrow">
+        <span class="ctrllabel">追従の強さ <b id="ikGainVal">0.5</b></span>
+        <input type="range" id="ikGain" min="0.1" max="1" step="0.05" value="0.5">
+      </div>
+      <div class="btns">
+        <button class="act" id="resetTargetBtn">ターゲットを先端に戻す</button>
+      </div>
+      <div id="ikStatus" class="muted"></div>
+    </div>
   </div>
 
   <div id="hitBanner">⚠ 衝突を検知</div>
@@ -261,6 +278,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import URDFLoader from 'urdf-loader';
 
 // ---- サンプル6軸アームの URDF（プリミティブ形状なので外部メッシュ不要） ----
@@ -646,6 +664,93 @@ function checkCollisions() {
     playStatus.textContent = '⚠ 衝突を検知して停止しました';
   }
 }
+
+// ---- IK（CCD法・位置のみ） ----
+const ikChk = document.getElementById('ikChk');
+const ikGain = document.getElementById('ikGain');
+const ikGainVal = document.getElementById('ikGainVal');
+const ikStatus = document.getElementById('ikStatus');
+let ikActive = false;
+
+// 先端(eeLink)から根元へ辿って関節チェーンを作る（tip→base順）
+const ikChain = [];
+for (let o = eeLink; o && o !== robot; o = o.parent) {
+  if (o.isURDFJoint && o.jointType !== 'fixed') ikChain.push(o);
+}
+
+// ドラッグ可能なターゲット（青い球）+ ギズモ
+const target = new THREE.Mesh(
+  new THREE.SphereGeometry(0.035, 24, 16),
+  new THREE.MeshBasicMaterial({ color: 0x5db1ff, transparent: true, opacity: 0.85 })
+);
+target.visible = false;
+scene.add(target);
+
+const tcontrols = new TransformControls(camera, renderer.domElement);
+tcontrols.setSize(0.9);
+tcontrols.addEventListener('dragging-changed', (e) => { controls.enabled = !e.value; });
+tcontrols.addEventListener('objectChange', () => { if (ikActive) solveIK(); });
+scene.add(tcontrols);
+
+const _ep = new THREE.Vector3(), _jp = new THREE.Vector3(), _q = new THREE.Quaternion();
+const _axis = new THREE.Vector3(), _toEnd = new THREE.Vector3(), _toTarget = new THREE.Vector3(), _cross = new THREE.Vector3();
+
+function solveIK() {
+  const gain = parseFloat(ikGain.value);
+  const tp = target.position;
+  for (let iter = 0; iter < 12; iter++) {
+    robot.updateMatrixWorld(true);
+    eeLink.getWorldPosition(_ep);
+    if (_ep.distanceTo(tp) < 0.004) break;
+    for (const joint of ikChain) {
+      joint.getWorldPosition(_jp);
+      joint.getWorldQuaternion(_q);
+      _axis.copy(joint.axis).applyQuaternion(_q).normalize();
+      eeLink.getWorldPosition(_ep);
+      _toEnd.subVectors(_ep, _jp);
+      _toTarget.subVectors(tp, _jp);
+      // 関節軸に垂直な平面へ射影してから角度を求める
+      _toEnd.addScaledVector(_axis, -_toEnd.dot(_axis));
+      _toTarget.addScaledVector(_axis, -_toTarget.dot(_axis));
+      if (_toEnd.lengthSq() < 1e-8 || _toTarget.lengthSq() < 1e-8) continue;
+      _toEnd.normalize(); _toTarget.normalize();
+      let ang = Math.acos(THREE.MathUtils.clamp(_toEnd.dot(_toTarget), -1, 1));
+      if (ang < 1e-5) continue;
+      _cross.crossVectors(_toEnd, _toTarget);
+      if (_cross.dot(_axis) < 0) ang = -ang;
+      ang *= gain;
+      const nv = THREE.MathUtils.clamp(joint.angle + ang, joint.limit.lower, joint.limit.upper);
+      joint.setJointValue(nv);
+      robot.updateMatrixWorld(true);
+    }
+  }
+  updateSliderUI(readPose());
+  eeLink.getWorldPosition(_ep);
+  const err = _ep.distanceTo(tp);
+  ikStatus.textContent = err < 0.02 ? '到達 ✓' : `誤差 ${(err * 1000).toFixed(0)} mm（可動範囲外かも）`;
+}
+
+function setIKMode(on) {
+  ikActive = on;
+  target.visible = on;
+  if (on) {
+    stopPlay();
+    robot.updateMatrixWorld(true);
+    eeLink.getWorldPosition(target.position);
+    tcontrols.attach(target);
+    ikStatus.textContent = '青い球を掴んで動かしてください';
+  } else {
+    tcontrols.detach();
+    ikStatus.textContent = '';
+  }
+}
+ikChk.addEventListener('change', () => setIKMode(ikChk.checked));
+ikGain.addEventListener('input', () => { ikGainVal.textContent = parseFloat(ikGain.value).toFixed(2); });
+document.getElementById('resetTargetBtn').addEventListener('click', () => {
+  robot.updateMatrixWorld(true);
+  eeLink.getWorldPosition(target.position);
+  if (ikActive) ikStatus.textContent = 'ターゲットを先端に戻しました';
+});
 
 // ---- PC / モバイル判定 ----
 const DESKTOP_MQ = window.matchMedia('(min-width: 860px) and (pointer: fine)');
