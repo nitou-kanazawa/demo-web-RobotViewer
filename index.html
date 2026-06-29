@@ -123,6 +123,45 @@
   .chk { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 6px; }
   .chk input { width: 18px; height: 18px; accent-color: var(--accent); }
 
+  /* ===== PC（広い画面＋マウス）専用レイアウト ===== */
+  #hint {
+    display: none;
+    position: fixed; left: 20px; bottom: 20px; z-index: 4;
+    color: var(--muted); font-size: 12px; line-height: 1.8;
+    background: rgba(20,26,34,.55); padding: 9px 13px; border-radius: 10px;
+    border: 1px solid var(--border); pointer-events: none; backdrop-filter: blur(4px);
+  }
+  #hint b { color: var(--text); font-weight: 600; }
+
+  @media (min-width: 860px) and (pointer: fine) {
+    #title { background: none; font-size: 16px; padding: 18px 22px; }
+    /* コントロールを右サイドの固定ドックに変身 */
+    #panel {
+      left: auto; right: 0; top: 0; bottom: 0;
+      width: 360px; max-height: none; border-radius: 0;
+      border-top: none; border-left: 1px solid var(--border);
+      padding: 16px 18px 22px;
+      box-shadow: -10px 0 34px rgba(0,0,0,.4);
+      transform: none !important; /* 折りたたみ無効（常時表示） */
+    }
+    #panelHeader { padding: 4px 2px 12px; cursor: default; }
+    #panelHeader .grip { display: none; }
+    #panelHeader b { font-size: 16px; }
+    #toggleBtn { display: none; }
+    .tabs { position: sticky; top: 0; z-index: 3; background: var(--panel); padding-bottom: 10px; }
+    .row { margin: 14px 0; }
+    .wp { padding: 11px 12px; }
+    #hint { display: block; } /* マウス操作ヒントを表示 */
+  }
+
+  #hitBanner {
+    position: fixed; top: calc(env(safe-area-inset-top) + 44px); left: 50%; transform: translateX(-50%);
+    background: rgba(220, 40, 50, 0.92); color: #fff; font-size: 13px; font-weight: 700;
+    padding: 7px 16px; border-radius: 20px; display: none; z-index: 6;
+    box-shadow: 0 4px 14px rgba(220,40,50,.4); animation: pulse 1s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .6; } }
+
   #loading {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     flex-direction: column; gap: 14px; background: var(--bg); z-index: 10; font-size: 14px; color: var(--muted);
@@ -154,6 +193,8 @@
     <div class="tabs">
       <button class="tab active" data-tab="joints">関節</button>
       <button class="tab" data-tab="path">パス <span id="wpBadge" class="badge">0</span></button>
+      <button class="tab" data-tab="env">環境</button>
+      <button class="tab" data-tab="ik">IK</button>
     </div>
 
     <div id="tab-joints" class="tabpane active">
@@ -186,7 +227,42 @@
       </div>
       <div id="playStatus" class="muted"></div>
     </div>
+
+    <div id="tab-env" class="tabpane">
+      <div class="chkrow" style="flex-direction:column; gap:10px; align-items:flex-start;">
+        <label class="chk"><input type="checkbox" id="collideChk" checked> 当たり判定を有効</label>
+        <label class="chk"><input type="checkbox" id="showObsChk" checked> 障害物を表示</label>
+        <label class="chk"><input type="checkbox" id="stopOnHitChk" checked> 衝突したら再生を停止</label>
+      </div>
+      <div class="muted" style="margin-top:8px;">
+        各リンクの境界ボックス（AABB）と障害物・床の交差で判定します。<br>
+        衝突したリンクは<span style="color:#ff5a6e;">赤く発光</span>します。
+      </div>
+      <div class="btns">
+        <button class="act" id="resetObsBtn">障害物を初期配置に戻す</button>
+      </div>
+    </div>
+
+    <div id="tab-ik" class="tabpane">
+      <label class="chk"><input type="checkbox" id="ikChk"> IKモード（先端をドラッグで移動）</label>
+      <div class="muted" style="margin-top:8px;">
+        表示される<span style="color:#5db1ff;">青い球（ギズモ）</span>を掴んで動かすと、<br>
+        先端がそこへ届くよう各関節を自動計算します（CCD法・位置のみ）。
+      </div>
+      <div class="ctrlrow">
+        <span class="ctrllabel">追従の強さ <b id="ikGainVal">0.5</b></span>
+        <input type="range" id="ikGain" min="0.1" max="1" step="0.05" value="0.5">
+      </div>
+      <div class="btns">
+        <button class="act" id="resetTargetBtn">ターゲットを先端に戻す</button>
+      </div>
+      <div id="ikStatus" class="muted"></div>
+    </div>
   </div>
+
+  <div id="hitBanner">⚠ 衝突を検知</div>
+
+  <div id="hint"><b>ドラッグ</b> 回転 ／ <b>ホイール</b> ズーム ／ <b>右ドラッグ</b> 平行移動</div>
 
 <script type="importmap">
 {
@@ -202,6 +278,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import URDFLoader from 'urdf-loader';
 
 // ---- サンプル6軸アームの URDF（プリミティブ形状なので外部メッシュ不要） ----
@@ -321,6 +398,7 @@ scene.add(grid);
 
 // ---- URDF 読み込み ----
 let robot = null;
+const linkMeshes = []; // 当たり判定対象（各リンクの可視メッシュ）
 const slidersEl = document.getElementById('sliders');
 
 function setVal(name, v) {
@@ -334,7 +412,15 @@ try {
 
   // URDF は Z-up。three.js は Y-up なので X 軸まわりに -90°回して立たせる。
   robot.rotation.x = -Math.PI / 2;
-  robot.traverse((c) => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
+  robot.traverse((c) => {
+    if (c.isMesh) {
+      c.castShadow = true; c.receiveShadow = true;
+      // 個別にハイライトできるようマテリアルを複製し、元の発光色を控える
+      c.material = c.material.clone();
+      c.userData.baseEmissive = c.material.emissive ? c.material.emissive.getHex() : 0x000000;
+      linkMeshes.push(c);
+    }
+  });
   scene.add(robot);
 
   buildSliders();
@@ -517,9 +603,163 @@ function updatePlayback(dt) {
   if (finished) { stopPlay(); playStatus.textContent = '完了'; }
 }
 
-// ---- パネル開閉 ----
+// ---- 環境（障害物） ----
+const obstacles = [];
+const OBS_MAT = () => new THREE.MeshStandardMaterial({ color: 0x6b7585, roughness: 0.85, metalness: 0.1, transparent: true, opacity: 0.9 });
+function addBoxObstacle(x, y, z, sx, sy, sz) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), OBS_MAT());
+  m.position.set(x, y, z);
+  m.castShadow = true; m.receiveShadow = true;
+  scene.add(m);
+  obstacles.push(m);
+  return m;
+}
+function resetObstacles() {
+  obstacles.forEach((o) => scene.remove(o));
+  obstacles.length = 0;
+  addBoxObstacle(0.46, 0.22, 0.0, 0.16, 0.44, 0.42); // 縦長の壁
+  addBoxObstacle(-0.30, 0.13, 0.34, 0.26, 0.26, 0.26); // 箱
+}
+resetObstacles();
+
+// ---- 当たり判定（各リンクのAABB × 障害物/床） ----
+const collideChk = document.getElementById('collideChk');
+const showObsChk = document.getElementById('showObsChk');
+const stopOnHitChk = document.getElementById('stopOnHitChk');
+const hitBanner = document.getElementById('hitBanner');
+const _lbox = new THREE.Box3();
+
+function setHighlight(mesh, on) {
+  if (!mesh.material.emissive) return;
+  if (on) { mesh.material.emissive.setHex(0xff2a2a); mesh.material.emissiveIntensity = 1; }
+  else { mesh.material.emissive.setHex(mesh.userData.baseEmissive); }
+}
+function clearHighlights() { linkMeshes.forEach((m) => setHighlight(m, false)); }
+
+showObsChk.addEventListener('change', () => {
+  obstacles.forEach((o) => { o.visible = showObsChk.checked; });
+});
+document.getElementById('resetObsBtn').addEventListener('click', () => {
+  resetObstacles();
+  obstacles.forEach((o) => { o.visible = showObsChk.checked; });
+});
+
+function checkCollisions() {
+  if (!collideChk.checked) { clearHighlights(); hitBanner.style.display = 'none'; return; }
+  robot.updateMatrixWorld(true);
+  const obsBoxes = obstacles.filter((o) => o.visible).map((o) => new THREE.Box3().setFromObject(o));
+  let anyHit = false;
+  for (const mesh of linkMeshes) {
+    _lbox.setFromObject(mesh);
+    let hit = _lbox.min.y < -0.005; // 床（y=0）にめり込み
+    if (!hit) {
+      for (const ob of obsBoxes) { if (_lbox.intersectsBox(ob)) { hit = true; break; } }
+    }
+    setHighlight(mesh, hit);
+    if (hit) anyHit = true;
+  }
+  hitBanner.style.display = anyHit ? 'block' : 'none';
+  if (anyHit && player.playing && stopOnHitChk.checked) {
+    stopPlay();
+    playStatus.textContent = '⚠ 衝突を検知して停止しました';
+  }
+}
+
+// ---- IK（CCD法・位置のみ） ----
+const ikChk = document.getElementById('ikChk');
+const ikGain = document.getElementById('ikGain');
+const ikGainVal = document.getElementById('ikGainVal');
+const ikStatus = document.getElementById('ikStatus');
+let ikActive = false;
+
+// 先端(eeLink)から根元へ辿って関節チェーンを作る（tip→base順）
+const ikChain = [];
+for (let o = eeLink; o && o !== robot; o = o.parent) {
+  if (o.isURDFJoint && o.jointType !== 'fixed') ikChain.push(o);
+}
+
+// ドラッグ可能なターゲット（青い球）+ ギズモ
+const target = new THREE.Mesh(
+  new THREE.SphereGeometry(0.035, 24, 16),
+  new THREE.MeshBasicMaterial({ color: 0x5db1ff, transparent: true, opacity: 0.85 })
+);
+target.visible = false;
+scene.add(target);
+
+const tcontrols = new TransformControls(camera, renderer.domElement);
+tcontrols.setSize(0.9);
+tcontrols.addEventListener('dragging-changed', (e) => { controls.enabled = !e.value; });
+tcontrols.addEventListener('objectChange', () => { if (ikActive) solveIK(); });
+scene.add(tcontrols);
+
+const _ep = new THREE.Vector3(), _jp = new THREE.Vector3(), _q = new THREE.Quaternion();
+const _axis = new THREE.Vector3(), _toEnd = new THREE.Vector3(), _toTarget = new THREE.Vector3(), _cross = new THREE.Vector3();
+
+function solveIK() {
+  const gain = parseFloat(ikGain.value);
+  const tp = target.position;
+  for (let iter = 0; iter < 12; iter++) {
+    robot.updateMatrixWorld(true);
+    eeLink.getWorldPosition(_ep);
+    if (_ep.distanceTo(tp) < 0.004) break;
+    for (const joint of ikChain) {
+      joint.getWorldPosition(_jp);
+      joint.getWorldQuaternion(_q);
+      _axis.copy(joint.axis).applyQuaternion(_q).normalize();
+      eeLink.getWorldPosition(_ep);
+      _toEnd.subVectors(_ep, _jp);
+      _toTarget.subVectors(tp, _jp);
+      // 関節軸に垂直な平面へ射影してから角度を求める
+      _toEnd.addScaledVector(_axis, -_toEnd.dot(_axis));
+      _toTarget.addScaledVector(_axis, -_toTarget.dot(_axis));
+      if (_toEnd.lengthSq() < 1e-8 || _toTarget.lengthSq() < 1e-8) continue;
+      _toEnd.normalize(); _toTarget.normalize();
+      let ang = Math.acos(THREE.MathUtils.clamp(_toEnd.dot(_toTarget), -1, 1));
+      if (ang < 1e-5) continue;
+      _cross.crossVectors(_toEnd, _toTarget);
+      if (_cross.dot(_axis) < 0) ang = -ang;
+      ang *= gain;
+      const nv = THREE.MathUtils.clamp(joint.angle + ang, joint.limit.lower, joint.limit.upper);
+      joint.setJointValue(nv);
+      robot.updateMatrixWorld(true);
+    }
+  }
+  updateSliderUI(readPose());
+  eeLink.getWorldPosition(_ep);
+  const err = _ep.distanceTo(tp);
+  ikStatus.textContent = err < 0.02 ? '到達 ✓' : `誤差 ${(err * 1000).toFixed(0)} mm（可動範囲外かも）`;
+}
+
+function setIKMode(on) {
+  ikActive = on;
+  target.visible = on;
+  if (on) {
+    stopPlay();
+    robot.updateMatrixWorld(true);
+    eeLink.getWorldPosition(target.position);
+    tcontrols.attach(target);
+    ikStatus.textContent = '青い球を掴んで動かしてください';
+  } else {
+    tcontrols.detach();
+    ikStatus.textContent = '';
+  }
+}
+ikChk.addEventListener('change', () => setIKMode(ikChk.checked));
+ikGain.addEventListener('input', () => { ikGainVal.textContent = parseFloat(ikGain.value).toFixed(2); });
+document.getElementById('resetTargetBtn').addEventListener('click', () => {
+  robot.updateMatrixWorld(true);
+  eeLink.getWorldPosition(target.position);
+  if (ikActive) ikStatus.textContent = 'ターゲットを先端に戻しました';
+});
+
+// ---- PC / モバイル判定 ----
+const DESKTOP_MQ = window.matchMedia('(min-width: 860px) and (pointer: fine)');
+const DOCK_W = 360; // PC時の右ドック幅（CSSと一致させる）
+
+// ---- パネル開閉（モバイルのみ） ----
 const panel = document.getElementById('panel');
 document.getElementById('panelHeader').addEventListener('click', () => {
+  if (DESKTOP_MQ.matches) return; // PCでは常時表示
   const collapsed = panel.classList.toggle('collapsed');
   document.getElementById('toggleBtn').textContent = collapsed ? '開く ▲' : '閉じる ▼';
 });
@@ -528,15 +768,20 @@ document.getElementById('panelHeader').addEventListener('click', () => {
 function resize() {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
-  camera.aspect = w / h;
+  // PC時は右ドック分を見越して、ロボットを左の空き領域の中央に寄せる
+  const pad = DESKTOP_MQ.matches ? DOCK_W : 0;
+  camera.aspect = (w + pad) / h;
+  if (pad) camera.setViewOffset(w + pad, h, pad, 0, w, h);
+  else camera.clearViewOffset();
   camera.updateProjectionMatrix();
 }
 addEventListener('resize', resize);
+DESKTOP_MQ.addEventListener('change', resize);
 resize();
 
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
-  if (robot) updatePlayback(dt);
+  if (robot) { updatePlayback(dt); checkCollisions(); }
   controls.update();
   renderer.render(scene, camera);
 });
